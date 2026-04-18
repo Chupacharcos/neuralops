@@ -1,0 +1,127 @@
+"""Monitoriza posicionamiento web via Google Search Console API. Miércoles semanal."""
+import os
+import asyncio
+import logging
+import httpx
+import json
+from langchain_groq import ChatGroq
+from core import telegram_bot, memory
+from dotenv import load_dotenv
+
+load_dotenv("/var/www/neuralops/.env")
+logger = logging.getLogger(__name__)
+
+llm = ChatGroq(model="llama-3.3-70b-versatile", api_key=os.getenv("GROQ_API_KEY"), temperature=0)
+
+SITE_URL = "https://adrianmoreno-dev.com"
+GSC_TOKEN_PATH = "/var/www/neuralops/.gsc_token.json"  # OAuth token file
+
+SEO_PROMPT = """Analiza estos datos de Google Search Console y sugiere mejoras concretas de SEO.
+Para cada oportunidad detectada, da el cambio exacto en title o meta description.
+
+Datos de keywords con impresiones pero CTR bajo (<3%):
+{keywords_data}
+
+Páginas analizadas:
+{pages}
+
+Responde con máx 5 sugerencias concretas, formato:
+- Página: /ruta/pagina
+  Problema: [descripción]
+  Fix: [nuevo title o meta description exacto]"""
+
+
+async def _get_search_console_data(token: dict) -> dict | None:
+    """Query Google Search Console API for search analytics."""
+    access_token = token.get("access_token")
+    if not access_token:
+        return None
+
+    headers = {"Authorization": f"Bearer {access_token}", "Content-Type": "application/json"}
+    payload = {
+        "startDate": "2026-03-01",
+        "endDate": "2026-04-17",
+        "dimensions": ["query", "page"],
+        "rowLimit": 50,
+        "dimensionFilterGroups": [{
+            "filters": [{"dimension": "impressions", "operator": "greaterThan", "expression": "10"}]
+        }]
+    }
+
+    async with httpx.AsyncClient() as client:
+        resp = await client.post(
+            f"https://searchconsole.googleapis.com/webmasters/v3/sites/{SITE_URL}/searchAnalytics/query",
+            headers=headers,
+            json=payload,
+            timeout=30,
+        )
+        if resp.status_code == 200:
+            return resp.json()
+        elif resp.status_code == 401:
+            logger.warning("[SEOMonitor] Token expirado — refrescar OAuth")
+    return None
+
+
+def _find_low_ctr_opportunities(data: dict) -> list[dict]:
+    """Find queries with impressions > 10 but CTR < 3%."""
+    opportunities = []
+    for row in data.get("rows", []):
+        impressions = row.get("impressions", 0)
+        ctr = row.get("ctr", 0)
+        query = row["keys"][0] if row.get("keys") else ""
+        page = row["keys"][1] if len(row.get("keys", [])) > 1 else ""
+
+        if impressions >= 10 and ctr < 0.03:
+            opportunities.append({
+                "query": query,
+                "page": page,
+                "impressions": impressions,
+                "ctr": round(ctr * 100, 1),
+                "position": round(row.get("position", 0), 1),
+            })
+    return sorted(opportunities, key=lambda x: x["impressions"], reverse=True)[:10]
+
+
+async def seo_monitor():
+    # Load OAuth token
+    if not os.path.exists(GSC_TOKEN_PATH):
+        await telegram_bot.send_alert(
+            "ℹ️ <b>SEOMonitor</b>: sin token OAuth\n"
+            "Para activar: crea /var/www/neuralops/.gsc_token.json con el access_token de Google Search Console API.\n"
+            "Guía: console.cloud.google.com → Search Console API → OAuth 2.0"
+        )
+        logger.info("[SEOMonitor] token OAuth no encontrado — saltando")
+        return
+
+    with open(GSC_TOKEN_PATH) as f:
+        token = json.load(f)
+
+    data = await _get_search_console_data(token)
+    if not data:
+        logger.warning("[SEOMonitor] no se pudieron obtener datos de GSC")
+        return
+
+    opportunities = _find_low_ctr_opportunities(data)
+    if not opportunities:
+        logger.info("[SEOMonitor] sin oportunidades de mejora esta semana")
+        return
+
+    keywords_text = "\n".join(
+        f"- '{o['query']}' → {o['page']} | {o['impressions']} impresiones | CTR {o['ctr']}% | pos {o['position']}"
+        for o in opportunities
+    )
+    pages = list({o["page"] for o in opportunities})
+
+    response = await llm.ainvoke(SEO_PROMPT.format(keywords_data=keywords_text, pages="\n".join(pages)))
+    suggestions = response.content.strip()
+
+    await telegram_bot.send_alert(
+        f"🔍 <b>SEOMonitor — Informe semanal</b>\n\n"
+        f"Oportunidades detectadas: {len(opportunities)}\n\n"
+        f"{suggestions[:1000]}"
+    )
+    memory.log_event("seo_monitor", "report_generated", {"opportunities": len(opportunities)})
+
+
+if __name__ == "__main__":
+    asyncio.run(seo_monitor())

@@ -19,16 +19,23 @@ logging.basicConfig(
 logger = logging.getLogger("neuralops_cron")
 
 AGENTS = {
+    # Mantenimiento
     "code_review":           "agents.maintenance.code_review:code_review",
     "test_runner":           "agents.maintenance.test_runner:test_runner",
     "dependency_watch":      "agents.maintenance.dependency_watch:dependency_watch",
     "backup_verifier":       "agents.maintenance.backup_verifier:backup_verifier",
     "model_drift":           "agents.maintenance.model_drift_detector:model_drift_detector",
+    # Promoción
     "lead_scraper":          "agents.promotion.lead_scraper:lead_scraper",
     "lead_scorer":           "agents.promotion.lead_scorer:lead_scorer",
     "email_drafter":         "agents.promotion.email_drafter:email_drafter",
     "email_sender":          "agents.promotion.email_sender:email_sender",
     "content_creator":       "agents.promotion.content_creator:content_creator",
+    # Inteligencia
+    "seo_monitor":           "agents.intelligence.seo_monitor:seo_monitor",
+    "project_onboarding":    "agents.intelligence.project_auto_onboarding:project_auto_onboarding",
+    "project_evaluator":     "agents.intelligence.project_evaluator:evaluate_all_projects",
+    "meta_agent":            "agents.intelligence.meta_agent:meta_agent",
 }
 
 
