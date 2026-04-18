@@ -36,6 +36,7 @@ AGENTS = {
     "project_onboarding":    "agents.intelligence.project_auto_onboarding:project_auto_onboarding",
     "project_evaluator":     "agents.intelligence.project_evaluator:evaluate_all_projects",
     "meta_agent":            "agents.intelligence.meta_agent:meta_agent",
+    "portfolio_reorder":     "agents.intelligence.portfolio_reorder:portfolio_reorder",
 }
 
 
