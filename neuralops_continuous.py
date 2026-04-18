@@ -21,6 +21,7 @@ from agents.polling.email_tracker import email_tracker
 from agents.polling.analytics_parser import analytics_parser
 from agents.polling.social_listener import social_listener
 from agents.polling.competitor_watcher import competitor_watcher
+from agents.maintenance.health_agent import health_agent
 
 logging.basicConfig(
     level=logging.INFO,
@@ -41,6 +42,7 @@ SCHEDULE = [
     (analytics_parser,   900,  "Active sessions"),
     (social_listener,    3600, "Social mentions"),
     (competitor_watcher, 3600, "Market signals"),
+    (health_agent,       600,  "Server health"),
 ]
 
 
