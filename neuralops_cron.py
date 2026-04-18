@@ -25,6 +25,7 @@ AGENTS = {
     "dependency_watch":      "agents.maintenance.dependency_watch:dependency_watch",
     "backup_verifier":       "agents.maintenance.backup_verifier:backup_verifier",
     "model_drift":           "agents.maintenance.model_drift_detector:model_drift_detector",
+    "github_sync":           "agents.maintenance.github_sync:github_sync",
     # Promoción
     "lead_scraper":          "agents.promotion.lead_scraper:lead_scraper",
     "lead_scorer":           "agents.promotion.lead_scorer:lead_scorer",
@@ -32,6 +33,7 @@ AGENTS = {
     "email_sender":          "agents.promotion.email_sender:email_sender",
     "content_creator":       "agents.promotion.content_creator:content_creator",
     # Inteligencia
+    "project_builder":       "agents.intelligence.project_builder:project_builder",
     "seo_monitor":           "agents.intelligence.seo_monitor:seo_monitor",
     "project_onboarding":    "agents.intelligence.project_auto_onboarding:project_auto_onboarding",
     "project_evaluator":     "agents.intelligence.project_evaluator:evaluate_all_projects",

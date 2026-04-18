@@ -13,7 +13,8 @@ logger = logging.getLogger(__name__)
 
 llm = ChatGroq(model="llama-3.3-70b-versatile", api_key=os.getenv("GROQ_API_KEY"), temperature=0)
 
-SITE_URL = "https://adrianmoreno-dev.com"
+SITE_URL = "https://adrianmoreno-dev.com/"
+SITE_URL_ENCODED = "https%3A%2F%2Fadrianmoreno-dev.com%2F"
 GSC_TOKEN_PATH = "/var/www/neuralops/.gsc_token.json"  # OAuth token file
 
 SEO_PROMPT = """Analiza estos datos de Google Search Console y sugiere mejoras concretas de SEO.
@@ -31,34 +32,54 @@ Responde con máx 5 sugerencias concretas, formato:
   Fix: [nuevo title o meta description exacto]"""
 
 
+async def _refresh_token_if_needed(token: dict) -> dict:
+    """Renueva el access_token usando el refresh_token si ha expirado."""
+    async with httpx.AsyncClient() as client:
+        resp = await client.post(
+            "https://oauth2.googleapis.com/token",
+            data={
+                "client_id": token["client_id"],
+                "client_secret": token["client_secret"],
+                "refresh_token": token["refresh_token"],
+                "grant_type": "refresh_token",
+            },
+        )
+        if resp.status_code == 200:
+            new_data = resp.json()
+            token["access_token"] = new_data["access_token"]
+            with open(GSC_TOKEN_PATH, "w") as f:
+                json.dump(token, f, indent=2)
+            logger.info("[SEOMonitor] token renovado correctamente")
+    return token
+
+
 async def _get_search_console_data(token: dict) -> dict | None:
     """Query Google Search Console API for search analytics."""
-    access_token = token.get("access_token")
-    if not access_token:
-        return None
+    from datetime import date, timedelta
+    end_date = date.today().isoformat()
+    start_date = (date.today() - timedelta(days=28)).isoformat()
 
-    headers = {"Authorization": f"Bearer {access_token}", "Content-Type": "application/json"}
+    headers = {"Authorization": f"Bearer {token['access_token']}", "Content-Type": "application/json"}
     payload = {
-        "startDate": "2026-03-01",
-        "endDate": "2026-04-17",
+        "startDate": start_date,
+        "endDate": end_date,
         "dimensions": ["query", "page"],
-        "rowLimit": 50,
-        "dimensionFilterGroups": [{
-            "filters": [{"dimension": "impressions", "operator": "greaterThan", "expression": "10"}]
-        }]
+        "rowLimit": 100,
     }
 
     async with httpx.AsyncClient() as client:
-        resp = await client.post(
-            f"https://searchconsole.googleapis.com/webmasters/v3/sites/{SITE_URL}/searchAnalytics/query",
-            headers=headers,
-            json=payload,
-            timeout=30,
-        )
+        gsc_url = f"https://searchconsole.googleapis.com/webmasters/v3/sites/{SITE_URL_ENCODED}/searchAnalytics/query"
+        resp = await client.post(gsc_url, headers=headers, json=payload, timeout=30)
         if resp.status_code == 200:
             return resp.json()
         elif resp.status_code == 401:
-            logger.warning("[SEOMonitor] Token expirado — refrescar OAuth")
+            logger.info("[SEOMonitor] token expirado — renovando")
+            token = await _refresh_token_if_needed(token)
+            headers["Authorization"] = f"Bearer {token['access_token']}"
+            resp = await client.post(gsc_url, headers=headers, json=payload, timeout=30)
+            if resp.status_code == 200:
+                return resp.json()
+        logger.error(f"[SEOMonitor] GSC API error {resp.status_code}: {resp.text[:200]}")
     return None
 
 
@@ -83,13 +104,7 @@ def _find_low_ctr_opportunities(data: dict) -> list[dict]:
 
 
 async def seo_monitor():
-    # Load OAuth token
     if not os.path.exists(GSC_TOKEN_PATH):
-        await telegram_bot.send_alert(
-            "ℹ️ <b>SEOMonitor</b>: sin token OAuth\n"
-            "Para activar: crea /var/www/neuralops/.gsc_token.json con el access_token de Google Search Console API.\n"
-            "Guía: console.cloud.google.com → Search Console API → OAuth 2.0"
-        )
         logger.info("[SEOMonitor] token OAuth no encontrado — saltando")
         return
 

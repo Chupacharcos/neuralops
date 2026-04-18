@@ -1,10 +1,10 @@
 import psutil
 
 THRESHOLDS = {
-    "ram_pct": 85,
+    "ram_pct": 88,
     "cpu_pct": 90,
     "disk_pct": 80,
-    "swap_mb": 500,
+    "swap_mb": 1800,  # servidor tiene 2GB swap; alerta solo si casi lleno
 }
 
 
@@ -15,8 +15,7 @@ def check_server_health() -> dict:
     swap = psutil.swap_memory()
 
     alerts = []
-    if ram.percent > THRESHOLDS["ram_pct"]:
-        alerts.append(f"RAM al {ram.percent}% — {ram.available // 1024 // 1024}MB libres")
+    # RAM omitida — servidor siempre near-limit por diseño (múltiples servicios ML)
     if cpu > THRESHOLDS["cpu_pct"]:
         alerts.append(f"CPU al {cpu}% — posible sobrecarga")
     if disk.percent > THRESHOLDS["disk_pct"]:

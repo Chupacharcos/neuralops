@@ -17,3 +17,5 @@ venv/
 projects.json
 cache/
 scrapers/cache/
+.gsc_token.json
+credentials.json
