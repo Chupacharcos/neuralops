@@ -20,8 +20,7 @@ def check_server_health() -> dict:
         alerts.append(f"CPU al {cpu}% — posible sobrecarga")
     if disk.percent > THRESHOLDS["disk_pct"]:
         alerts.append(f"Disco al {disk.percent}% — limpiar backups antiguos")
-    if swap.used > THRESHOLDS["swap_mb"] * 1024 * 1024:
-        alerts.append(f"Swap en uso: {swap.used // 1024 // 1024}MB — riesgo OOM")
+    # Swap omitido — el servidor usa swap estructuralmente por los servicios ML
 
     return {
         "healthy": len(alerts) == 0,
