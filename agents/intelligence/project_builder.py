@@ -210,9 +210,24 @@ def _read_pdf(pdf_path: Path) -> str:
 
 # ── Fases de implementación ──────────────────────────────────────────────────
 
+async def _summarize_changes(text: str, spec: dict) -> str:
+    prompt = (
+        f"Este PDF describe cambios a un proyecto existente llamado '{spec.get('nombre', spec.get('slug', '?'))}'.\n"
+        f"Resume en 3-5 bullets concisos qué cambios propone el documento. "
+        f"Responde SOLO los bullets, sin introducción.\n\nDOCUMENTO:\n{text[:4000]}"
+    )
+    resp = await llm.ainvoke(prompt)
+    return resp.content.strip()[:800]
+
+
 async def _analyze_spec(text: str) -> dict:
     resp = await llm.ainvoke(SPEC_PROMPT.format(text=text[:8000]))
-    return _extract_json(resp.content)
+    data = _extract_json(resp.content)
+    required = ["nombre", "slug", "demo_type", "categoria", "descripcion_corta"]
+    missing = [k for k in required if not data.get(k)]
+    if missing:
+        raise ValueError(f"Spec incompleta — faltan campos: {missing}. LLM devolvió: {list(data.keys())}")
+    return data
 
 
 async def _generate_backend(spec: dict, text: str, port: int) -> dict:
@@ -441,6 +456,41 @@ async def project_builder():
             slug = spec["slug"]
             port = _next_port()
             logger.info(f"[ProjectBuilder] spec extraída: {slug} → puerto {port}")
+
+            # ── ¿Es una actualización de proyecto existente? ──────────────
+            existing = json.loads(PROJECTS_JSON.read_text()) if PROJECTS_JSON.exists() else []
+            is_update = any(p["slug"] == slug for p in existing)
+
+            if is_update:
+                # ¿Ya hay una aprobación pendiente registrada?
+                pending = memory.query("pending_updates", where={"slug": slug, "status": "approved"})
+                if not pending:
+                    # Pedir confirmación — extraer resumen de cambios
+                    changes_summary = await _summarize_changes(text, spec)
+                    conf_id = f"update_{slug}_{int(time.time())}"
+                    memory.upsert("pending_updates", conf_id, pdf_path.name, {
+                        "slug": slug, "pdf": str(pdf_path), "status": "pending",
+                        "changes": changes_summary,
+                    })
+                    await telegram_bot.send_confirmation({
+                        "type": "project_update",
+                        "id": conf_id,
+                        "message": (
+                            f"📝 <b>Actualización de proyecto existente</b>: <code>{slug}</code>\n\n"
+                            f"<b>Cambios propuestos</b>:\n{changes_summary}\n\n"
+                            f"¿Implementar estos cambios?"
+                        ),
+                    })
+                    logger.info(f"[ProjectBuilder] Update de {slug} pendiente de aprobación ({conf_id})")
+                    continue  # esperar respuesta en próximo ciclo
+
+                # Aprobado — marcar como en proceso y continuar como update
+                approved_record = pending[0]
+                memory.upsert("pending_updates", approved_record["id"], pdf_path.name, {
+                    **json.loads(approved_record.get("metadata") or "{}"),
+                    "status": "implementing",
+                })
+                logger.info(f"[ProjectBuilder] Update de {slug} aprobado — implementando")
 
             # 3. Generar backend
             backend = await _generate_backend(spec, text, port)

@@ -9,7 +9,7 @@ from core import telegram_bot, memory
 
 logger = logging.getLogger(__name__)
 
-BACKUP_DIRS = ["/var/backups", "/home/ubuntu/backups", "/root/backups"]
+BACKUP_DIRS = ["/var/backups/portfolio", "/var/backups", "/home/ubuntu/backups", "/root/backups"]
 MAX_AGE_HOURS = 25
 
 
