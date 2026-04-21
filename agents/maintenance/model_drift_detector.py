@@ -1,8 +1,13 @@
-"""Detecta degradación de modelos ML con el tiempo. Semanal lunes."""
+"""
+Detecta degradación de modelos ML con el tiempo. Semanal lunes.
+- Drift > 5%  → confirmation_queue(model_retrain, priority=normal)
+- Drift > 10% → confirmation_queue(model_retrain, priority=high)
+"""
 import asyncio
 import logging
 import httpx
 from core import telegram_bot, memory
+from core.confirmation_queue import async_queue_action
 from dotenv import load_dotenv
 
 load_dotenv("/var/www/neuralops/.env")
@@ -70,21 +75,51 @@ async def model_drift_detector():
                 if score and baseline:
                     drop = baseline - score
                     if drop > 0.10:
-                        await telegram_bot.send_alert(
-                            f"🚨 <b>ModelDrift CRÍTICO</b>: {project['name']}\n"
-                            f"Score actual: {score:.3f} vs baseline: {baseline:.3f}\n"
-                            f"Caída: {drop:.3f} — Re-entrenamiento urgente recomendado"
+                        # Crítico → confirmation_queue prioridad high
+                        await async_queue_action(
+                            action_type="model_retrain",
+                            project=project["slug"],
+                            payload={
+                                "slug": project["slug"], "name": project["name"],
+                                "score": round(score, 4), "baseline": baseline,
+                                "drop": round(drop, 4), "detail":
+                                f"Score caído de {baseline:.3f} a {score:.3f} (−{drop:.3f}). "
+                                f"Reentrenar urgente con datos actualizados.",
+                            },
+                            message=(
+                                f"🚨 <b>Drift CRÍTICO</b>: {project['name']}\n"
+                                f"Baseline: <code>{baseline:.3f}</code> → Actual: <code>{score:.3f}</code>\n"
+                                f"Caída: <b>{drop:.3f}</b> ({drop/baseline*100:.1f}%)\n\n"
+                                f"Se recomienda reentrenamiento urgente."
+                            ),
+                            priority="high",
                         )
                     elif drop > 0.05:
-                        await telegram_bot.send_alert(
-                            f"⚠️ <b>ModelDrift</b>: {project['name']}\n"
-                            f"Score actual: {score:.3f} vs baseline: {baseline:.3f}\n"
-                            f"Caída: {drop:.3f} — Considerar re-entrenamiento"
+                        # Degradación leve → confirmation_queue prioridad normal
+                        await async_queue_action(
+                            action_type="model_retrain",
+                            project=project["slug"],
+                            payload={
+                                "slug": project["slug"], "name": project["name"],
+                                "score": round(score, 4), "baseline": baseline,
+                                "drop": round(drop, 4), "detail":
+                                f"Score caído de {baseline:.3f} a {score:.3f} (−{drop:.3f}). "
+                                f"Considerar reentrenamiento con datos más recientes.",
+                            },
+                            message=(
+                                f"⚠️ <b>Drift detectado</b>: {project['name']}\n"
+                                f"Baseline: <code>{baseline:.3f}</code> → Actual: <code>{score:.3f}</code>\n"
+                                f"Caída: <b>{drop:.3f}</b> ({drop/baseline*100:.1f}%)"
+                            ),
+                            priority="normal",
                         )
                     else:
                         logger.info(f"[ModelDrift] {project['name']}: score OK ({score:.3f})")
 
-                memory.log_event("model_drift", "checked", {"slug": project["slug"], "score": score})
+                memory.log_event("model_drift", "checked", {
+                    "slug": project["slug"], "score": score,
+                    "project": project["slug"],  # para que shared_context lo encuentre por proyecto
+                })
 
             except Exception as e:
                 logger.error(f"[ModelDrift] {project['slug']}: {e}")

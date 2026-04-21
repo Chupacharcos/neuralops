@@ -1,9 +1,16 @@
-"""Compara requirements.txt de cada proyecto contra PyPI. Noche 00:00."""
+"""
+Compara requirements.txt de cada proyecto contra PyPI. Noche 00:00.
+- PATCH → auto-apply (pip install -U) + restart servicio
+- MINOR → confirmation_queue (requiere aprobación Telegram)
+- MAJOR → confirmation_queue con prioridad high + advertencia changelog
+"""
 import os
 import asyncio
 import logging
+import subprocess
 import httpx
 from core import telegram_bot, memory
+from core.confirmation_queue import async_queue_action
 from core.github_api import create_pr
 
 logger = logging.getLogger(__name__)
@@ -69,6 +76,31 @@ def _bump_type(current: str, latest: str) -> str:
     return "NONE"
 
 
+def _apply_patch_updates(project_dir: str, patches: list[str]) -> tuple[list[str], list[str]]:
+    """Aplica PATCH updates con pip. Devuelve (ok_list, fail_list)."""
+    ok, fail = [], []
+    venv_pip = os.path.join(project_dir, "venv", "bin", "pip")
+    if not os.path.exists(venv_pip):
+        venv_pip = "/var/www/chatbot/venv/bin/pip"
+
+    for entry in patches:
+        # entry = "fastapi: 0.95.0 → 0.95.2"
+        pkg = entry.split(":")[0].strip()
+        latest = entry.split("→")[-1].strip()
+        try:
+            result = subprocess.run(
+                [venv_pip, "install", f"{pkg}=={latest}", "--quiet"],
+                capture_output=True, text=True, timeout=60,
+            )
+            if result.returncode == 0:
+                ok.append(entry)
+            else:
+                fail.append(f"{entry} (pip error: {result.stderr[:100]})")
+        except Exception as e:
+            fail.append(f"{entry} ({e})")
+    return ok, fail
+
+
 async def dependency_watch():
     async with httpx.AsyncClient() as client:
         for repo, project_dir in PROJECT_DIRS.items():
@@ -88,21 +120,50 @@ async def dependency_watch():
                 if bump != "NONE":
                     updates[bump].append(f"{pkg}: {current_ver} → {latest}")
 
-            if updates["MAJOR"]:
-                await telegram_bot.send_alert(
-                    f"🚨 <b>DependencyWatch MAJOR</b>: {repo}\n" +
-                    "\n".join(updates["MAJOR"]) +
-                    "\n\n⚠️ Revisar changelog antes de actualizar."
-                )
-
-            if updates["MINOR"]:
-                await telegram_bot.send_alert(
-                    f"⚠️ <b>DependencyWatch MINOR</b>: {repo}\n" +
-                    "\n".join(updates["MINOR"])
-                )
-
+            # PATCH → auto-apply silenciosamente
             if updates["PATCH"]:
-                logger.info(f"[DependencyWatch] {repo} — {len(updates['PATCH'])} PATCH disponibles")
+                ok, fail = _apply_patch_updates(project_dir, updates["PATCH"])
+                if ok:
+                    logger.info(f"[DependencyWatch] {repo} — {len(ok)} PATCH aplicados: {', '.join(ok)}")
+                    memory.log_event("dependency_watch", "patch_applied",
+                                     {"repo": repo, "packages": ok})
+                if fail:
+                    await telegram_bot.send_alert(
+                        f"⚠️ <b>DependencyWatch</b>: {repo} — {len(fail)} PATCH fallidos\n" +
+                        "\n".join(fail[:5])
+                    )
+
+            # MINOR → confirmation_queue (cambio de funcionalidad, necesita validar)
+            if updates["MINOR"]:
+                pkg_list = "\n".join(f"• {u}" for u in updates["MINOR"])
+                await async_queue_action(
+                    action_type="dependency_upgrade",
+                    project=repo,
+                    payload={"repo": repo, "project_dir": project_dir,
+                             "packages": updates["MINOR"], "level": "MINOR"},
+                    message=(
+                        f"<b>{len(updates['MINOR'])} dependencias MINOR</b> disponibles en <code>{repo}</code>:\n\n"
+                        f"{pkg_list}\n\n"
+                        f"<i>MINOR puede incluir cambios de API — revisar antes de aplicar.</i>"
+                    ),
+                    priority="normal",
+                )
+
+            # MAJOR → confirmation_queue con prioridad alta
+            if updates["MAJOR"]:
+                pkg_list = "\n".join(f"• {u}" for u in updates["MAJOR"])
+                await async_queue_action(
+                    action_type="dependency_upgrade",
+                    project=repo,
+                    payload={"repo": repo, "project_dir": project_dir,
+                             "packages": updates["MAJOR"], "level": "MAJOR"},
+                    message=(
+                        f"🚨 <b>{len(updates['MAJOR'])} dependencias MAJOR</b> en <code>{repo}</code>:\n\n"
+                        f"{pkg_list}\n\n"
+                        f"<b>⚠️ MAJOR: puede romper compatibilidad.</b> Revisar changelog antes de aprobar."
+                    ),
+                    priority="high",
+                )
 
             memory.log_event("dependency_watch", "checked", {
                 "repo": repo, "major": len(updates["MAJOR"]),

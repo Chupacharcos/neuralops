@@ -401,6 +401,14 @@ async def evaluate_all_projects():
         "projects_evaluated": len(scores), "month": month
     })
     logger.info(f"[Evaluator] {len(scores)} proyectos evaluados")
+    from core.agent_status import report
+    if scores:
+        top = max(scores, key=lambda s: s.get("total", 0))
+        report("project_evaluator",
+               f"{len(scores)} proyectos evaluados | Líder: {top.get('slug','?')} ({top.get('total',0):.0f}/100)",
+               "ok")
+    else:
+        report("project_evaluator", "Sin proyectos evaluados este ciclo", "info")
 
 
 if __name__ == "__main__":

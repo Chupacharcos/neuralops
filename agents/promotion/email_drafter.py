@@ -85,25 +85,29 @@ async def email_drafter():
             ))
             body = response.content.strip()
 
-            # Store draft in memory for approval
-            draft_id = f"draft_{lead['email'].replace('@','_').replace('.','_')}"
+            # Guardar borrador en memoria con status pending_approval
+            draft_id = f"draft_{lead['email'].replace('@','_').replace('.','_').replace('+','_')}"
             memory.upsert("email_drafts", draft_id, body, {
-                "lead_email": lead["email"],
+                "lead_email":   lead["email"],
                 "lead_company": lead.get("company", ""),
-                "subject": subject,
+                "subject":      subject,
                 "project_slug": lead["project_slug"],
-                "score": lead["score"],
-                "status": "pending_approval",
+                "score":        lead["score"],
+                "status":       "pending_approval",
             })
             update_lead(lead["email"], status="drafted")
 
+            # Botones inline de Telegram — response_handler los gestiona
             await telegram_bot.send_alert(
                 f"✉️ <b>EmailDrafter</b> — Score: {lead['score']}/100\n"
-                f"Para: {lead.get('company', lead['email'])} ({lead['sector']})\n"
-                f"Asunto: {subject}\n\n"
-                f"<i>{body[:400]}</i>\n\n"
-                f"ID: <code>{draft_id}</code>\n"
-                f"Responde <b>/aprobar_{draft_id}</b> para enviar"
+                f"Para: <b>{lead.get('company', lead['email'])}</b> ({lead['sector']})\n"
+                f"Email: <code>{lead['email']}</code>\n"
+                f"Asunto: <i>{subject}</i>\n\n"
+                f"<code>{body[:500]}</code>",
+                buttons=[[
+                    {"text": "✅ Aprobar y enviar", "data": f"approve_draft:{draft_id}"},
+                    {"text": "❌ Descartar",        "data": f"reject_draft:{draft_id}"},
+                ]],
             )
             logger.info(f"[EmailDrafter] borrador creado para {lead['email']}")
 

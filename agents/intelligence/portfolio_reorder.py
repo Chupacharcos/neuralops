@@ -41,7 +41,8 @@ def _get_db():
 def _get_portfolio_projects() -> list[dict]:
     with _get_db() as conn:
         with conn.cursor() as cur:
-            cur.execute("SELECT id, titulo, slug, orden, destacado FROM projects ORDER BY orden")
+            # Solo proyectos activos — los inactivos (ej: apis-fiscales-spain) no se reordenan
+            cur.execute("SELECT id, titulo, slug, orden, destacado FROM projects WHERE activo=1 ORDER BY orden")
             return cur.fetchall()
 
 

@@ -60,10 +60,52 @@ async def _review_file(filepath: str, filename: str) -> str | None:
         return None
 
 
+def _repos_by_priority() -> list[tuple[str, str]]:
+    """Ordena repos priorizando proyectos con score bajo o acciones urgentes."""
+    from core.shared_context import load_system_context
+
+    ctx = load_system_context()
+    top_slugs  = [p["slug"] for p in ctx["top_projects"]]   # mayor score primero
+    urgent     = set(ctx["urgent_projects"])
+
+    # Mapa slug → repo_name (clave de REPOS)
+    slug_to_repo = {
+        "prediccion-precio-inmobiliario": "proyecto-inmobiliario",
+        "deteccion-zonas-revalorizacion": "proyecto-revalorizacion",
+        "prediccion-calidad-aire":        "calidad-aire",
+        "babymind":                       "BabyMind",
+        "metacoach":                      "MetaCoach",
+        "sports-engine":                  "Sports-Performance-Engine",
+        "fraud-detector":                 "fraud-detector",
+        "value-betting":                  "value-engine",
+        "alphasignal":                    "alphasignal",
+        "roomcraft-ai":                   "roomcraft",
+        "feliniai":                       "FeliniAI",
+    }
+
+    # Urgentes primero, luego proyectos con MENOR score (los que más necesitan atención)
+    repo_score: dict[str, float] = {}
+    for p in ctx["top_projects"]:
+        repo_name = slug_to_repo.get(p["slug"])
+        if repo_name:
+            repo_score[repo_name] = p["score"]
+
+    def sort_key(item):
+        repo_name = item[0]
+        # Urgentes al frente
+        if any(slug_to_repo.get(s) == repo_name for s in urgent):
+            return (0, 0)
+        # Menor score = mayor necesidad de review
+        score = repo_score.get(repo_name, 50)
+        return (1, score)
+
+    return sorted(REPOS.items(), key=sort_key)
+
+
 async def code_review():
     total_issues = 0
 
-    for repo, project_dir in list(REPOS.items())[:2]:  # max 2 repos en paralelo
+    for repo, project_dir in _repos_by_priority()[:3]:  # max 3 repos por noche (priorizados)
         if not os.path.isdir(project_dir):
             continue
 
@@ -111,6 +153,11 @@ async def code_review():
 
     memory.log_event("code_review", "completed", {"issues_created": total_issues})
     logger.info(f"[CodeReview] completado — {total_issues} issues creados")
+    from core.agent_status import report
+    if total_issues > 0:
+        report("code_review", f"{total_issues} issues creados en GitHub", "warning")
+    else:
+        report("code_review", "Revisión completada — sin issues críticos", "ok")
 
 
 if __name__ == "__main__":

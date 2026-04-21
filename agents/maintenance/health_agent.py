@@ -5,6 +5,7 @@ import time
 from graph.state import NeuralOpsState
 from core.resource_manager import check_server_health
 from core import telegram_bot, memory
+from core.agent_status import report
 
 logger = logging.getLogger(__name__)
 
@@ -53,4 +54,8 @@ async def health_agent(state: NeuralOpsState) -> NeuralOpsState:
             logger.error(f"[HealthAgent] error limpiando logs: {e}")
 
     logger.debug(f"[HealthAgent] RAM {server['ram_free_mb']}MB libres, CPU {server['cpu_pct']}%, Disk {server['disk_pct']}%")
+    level = "warning" if server["alerts"] else "ok"
+    report("health_agent",
+           f"RAM libre {server['ram_free_mb']}MB | CPU {server['cpu_pct']}% | Disco {server['disk_pct']}%",
+           level)
     return state

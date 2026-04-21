@@ -6,6 +6,7 @@ import httpx
 import subprocess
 from graph.state import NeuralOpsState
 from core import telegram_bot, memory
+from core.agent_status import report
 
 logger = logging.getLogger(__name__)
 
@@ -95,4 +96,13 @@ async def performance_watch(state: NeuralOpsState) -> NeuralOpsState:
                 logger.error(f"[PerformanceWatch] Puerto {port}: {e}")
 
     state["service_metrics"] = metrics
+    total = sum(1 for p in projects if p.get("health_url"))
+    down_count = len(down_since)
+    ok_count = total - down_count
+    if down_since:
+        report("performance_watch", f"⚠ {down_count} servicios caídos | {ok_count}/{total} OK", "warning")
+    elif metrics:
+        all_latest = [v[-1] for v in metrics.values() if v]
+        avg = int(sum(all_latest) / len(all_latest)) if all_latest else 0
+        report("performance_watch", f"{ok_count}/{total} servicios OK | media {avg}ms", "ok")
     return state

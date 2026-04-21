@@ -1,10 +1,16 @@
-"""Ejecuta pytest en cada proyecto. Si falla: LLM propone fix → crea PR. Noche 23:00."""
+"""
+Ejecuta pytest en cada proyecto. Noche 23:00.
+- Tests OK → log en memory
+- Sin tests → github_issue automático sugiriendo cobertura
+- Tests fallan → LLM propone fix → github_issue auto con el fix
+"""
 import os
 import asyncio
 import subprocess
 import logging
 from langchain_groq import ChatGroq
 from core import telegram_bot, memory
+from core.confirmation_queue import async_queue_action
 from core.github_api import create_issue
 from dotenv import load_dotenv
 
@@ -61,22 +67,43 @@ async def test_runner():
                 memory.log_event("test_runner", "tests_ok", {"repo": repo})
                 continue
 
-            # Tests failed — ask LLM for fix
+            # Tests fallan → LLM propone fix → GitHub issue automático
             traceback = result.stdout[-3000:] + result.stderr[-1000:]
             response = await llm.ainvoke(FIX_PROMPT.format(traceback=traceback))
-            fix_suggestion = response.content
+            fix_suggestion = response.content.strip()
+
+            # Crear issue en GitHub con el fix sugerido (AUTO — no requiere confirmación)
+            issue_body = (
+                f"## Tests fallando — Fix sugerido por LLM\n\n"
+                f"### Traceback\n```\n{traceback[-2000:]}\n```\n\n"
+                f"### Fix propuesto\n{fix_suggestion}\n\n"
+                f"---\n*Generado automáticamente por NeuralOps TestRunner*"
+            )
+            issue_url = await create_issue(
+                repo=repo,
+                title=f"[TestRunner] Tests fallando — fix propuesto",
+                body=issue_body,
+                labels=["bug", "automated", "test-failure"],
+            )
 
             await telegram_bot.send_alert(
                 f"🧪 <b>TestRunner: tests fallando</b>\n"
-                f"Repo: {repo}\n\n"
-                f"<b>Fix sugerido:</b>\n<code>{fix_suggestion[:500]}</code>"
+                f"Repo: <code>{repo}</code>\n"
+                f"Issue creado con fix: {issue_url or 'error creando issue'}\n\n"
+                f"<b>Fix sugerido:</b>\n<code>{fix_suggestion[:400]}</code>"
             )
-            memory.log_event("test_runner", "tests_failed", {"repo": repo, "fix": fix_suggestion})
+            memory.log_event("test_runner", "tests_failed", {
+                "repo": repo, "fix": fix_suggestion[:500],
+                "issue_url": issue_url or "",
+            })
 
         except subprocess.TimeoutExpired:
             await telegram_bot.send_alert(f"⏱️ <b>TestRunner timeout</b>: {repo} — tests >2min")
         except Exception as e:
             logger.error(f"[TestRunner] {repo}: {e}")
+
+    from core.agent_status import report
+    report("test_runner", f"Ciclo completado — {len(PROJECTS)} repos revisados", "ok")
 
 
 if __name__ == "__main__":

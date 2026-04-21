@@ -90,7 +90,7 @@ Responde SOLO con JSON válido sin markdown, sin comentarios:
   "url_github": "https://github.com/Chupacharcos/nombre-repo",
   "orden": 105,
   "endpoints_demo": [
-    {{"method": "POST", "path": "/demo/{slug}/predict", "description": "qué hace"}}
+    {{"method": "POST", "path": "/demo/{{slug}}/predict", "description": "qué hace"}}
   ]
 }}"""
 
@@ -221,7 +221,8 @@ async def _summarize_changes(text: str, spec: dict) -> str:
 
 
 async def _analyze_spec(text: str) -> dict:
-    resp = await llm.ainvoke(SPEC_PROMPT.format(text=text[:8000]))
+    safe_text = text[:8000].replace("{", "{{").replace("}", "}}")
+    resp = await llm.ainvoke(SPEC_PROMPT.format(text=safe_text))
     data = _extract_json(resp.content)
     required = ["nombre", "slug", "demo_type", "categoria", "descripcion_corta"]
     missing = [k for k in required if not data.get(k)]
@@ -231,9 +232,10 @@ async def _analyze_spec(text: str) -> dict:
 
 
 async def _generate_backend(spec: dict, text: str, port: int) -> dict:
+    safe_text = text[:6000].replace("{", "{{").replace("}", "}}")
     prompt = BACKEND_PROMPT.format(
         spec_json=json.dumps(spec, ensure_ascii=False, indent=2),
-        text=text[:6000],
+        text=safe_text,
         conventions=CONVENTIONS,
         slug=spec["slug"],
         port=port,
@@ -533,12 +535,16 @@ async def project_builder():
             )
             memory.log_event("project_builder", "project_built", {"slug": slug, "port": port})
             logger.info(f"[ProjectBuilder] {slug} implementado correctamente en puerto {port}")
+            from core.agent_status import report
+            report("project_builder", f"Implementado: {spec['nombre']} → puerto {port}", "ok")
 
         except Exception as e:
             logger.error(f"[ProjectBuilder] Error con {pdf_path.name}: {e}", exc_info=True)
             await telegram_bot.send_alert(
                 f"❌ <b>ProjectBuilder error</b> — {pdf_path.name}\n<code>{str(e)[:200]}</code>"
             )
+            from core.agent_status import report
+            report("project_builder", f"⚠ Error procesando {pdf_path.name}: {str(e)[:60]}", "error")
 
 
 if __name__ == "__main__":

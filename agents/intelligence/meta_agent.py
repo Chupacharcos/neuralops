@@ -87,13 +87,26 @@ async def meta_agent():
         f"{demo_alerts} alertas demo · {social_mentions} menciones</i>"
     )
 
-    memory.log_event("meta_agent", "weekly_report", {
-        "week": week,
-        "emails_sent": emails_sent,
-        "leads_scraped": leads_scraped,
-        "demo_alerts": demo_alerts,
-    })
-    logger.info(f"[MetaAgent] informe semanal {week} generado")
+    # Guardar como system_context estructurado — todos los agentes lo leen
+    system_ctx = {
+        "week":            week,
+        "report_text":     report,
+        "emails_sent":     emails_sent,
+        "leads_scraped":   leads_scraped,
+        "code_issues":     code_issues,
+        "test_failures":   test_failures,
+        "demo_alerts":     demo_alerts,
+        "model_drifts":    model_drifts,
+        "social_mentions": social_mentions,
+        "competitors":     competitors,
+        "system_healthy":  demo_alerts < 3 and test_failures == 0,
+        "generated_at":    datetime.now().isoformat(),
+    }
+    memory.upsert("system_context", "weekly_latest", report, system_ctx)
+    memory.upsert("system_context", f"weekly_{week}", report, system_ctx)
+
+    memory.log_event("meta_agent", "weekly_report", system_ctx)
+    logger.info(f"[MetaAgent] informe semanal {week} generado y guardado en system_context")
 
 
 if __name__ == "__main__":

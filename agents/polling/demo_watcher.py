@@ -5,6 +5,7 @@ import logging
 import httpx
 from graph.state import NeuralOpsState
 from core import telegram_bot, memory
+from core.agent_status import report
 
 logger = logging.getLogger(__name__)
 
@@ -63,4 +64,11 @@ async def demo_watcher(state: NeuralOpsState) -> NeuralOpsState:
                 logger.error(f"[DemoWatcher] {slug} error inesperado: {e}")
 
     state["demo_failures"] = failures
+    total = len(projects)
+    active_failures = {s: n for s, n in failures.items() if n > 0}
+    if active_failures:
+        worst = max(active_failures, key=active_failures.get)
+        report("demo_watcher", f"⚠ {worst} — {active_failures[worst]} fallos | {total - len(active_failures)}/{total} OK", "warning")
+    else:
+        report("demo_watcher", f"{total}/{total} demos respondiendo OK", "ok")
     return state
