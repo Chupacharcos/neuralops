@@ -233,6 +233,10 @@ async def error_repair():
                             f"Ocurrencias: {count}x en 6h"
                         )
                         report("error_repair", f"Reiniciado {svc_name} tras {count} errores", "ok")
+                        memory.log_event("error_repair", "service_restarted", {
+                            "service": svc_name, "occurrences": count,
+                            "error_msg": error["msg"][:200],
+                        })
                         repaired += 1
                         repaired_flag = True
                     else:
@@ -260,6 +264,10 @@ async def error_repair():
     logger.info(f"[ErrorRepair] {summary}")
     level = "warning" if (repaired + proposed) > 0 else "ok"
     report("error_repair", summary, level)
+    memory.log_event("error_repair", "cycle_completed", {
+        "repaired": repaired, "proposed": proposed, "skipped": skipped,
+        "total_errors": sum(len(v) for v in groups.values()),
+    })
 
     if repaired > 0 or proposed > 0:
         await telegram_bot.send_alert(
