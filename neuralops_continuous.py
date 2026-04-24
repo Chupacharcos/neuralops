@@ -1,4 +1,4 @@
-"""NeuralOps — Proceso continuo de polling. Lanzado por systemd."""
+"""NeuralOps — Proceso continuo de polling con LangGraph routing. Lanzado por systemd."""
 import asyncio
 import logging
 import sys
@@ -12,16 +12,13 @@ from dotenv import load_dotenv
 load_dotenv("/var/www/neuralops/.env")
 
 from graph.state import NeuralOpsState, default_state
+from graph.neuralops_graph import run_graph_cycle
 from core.resource_manager import check_server_health
 from core import telegram_bot
-from agents.polling.demo_watcher import demo_watcher
-from agents.polling.performance_watch import performance_watch
-from agents.polling.response_handler import response_handler
 from agents.polling.email_tracker import email_tracker
 from agents.polling.analytics_parser import analytics_parser
 from agents.polling.social_listener import social_listener
 from agents.polling.competitor_watcher import competitor_watcher
-from agents.maintenance.health_agent import health_agent
 
 logging.basicConfig(
     level=logging.INFO,
@@ -33,30 +30,32 @@ logging.basicConfig(
 )
 logger = logging.getLogger("neuralops")
 
-# (agent_fn, interval_seconds, description)
+# Agents that run on fixed intervals (don't benefit from LLM routing)
 SCHEDULE = [
-    (demo_watcher,       120,  "Demo errors"),
-    (performance_watch,  300,  "Service health"),
-    (response_handler,   300,  "Email inbox"),
     (email_tracker,      900,  "Link clicks"),
     (analytics_parser,   900,  "Active sessions"),
     (social_listener,    3600, "Social mentions"),
     (competitor_watcher, 3600, "Market signals"),
-    (health_agent,       600,  "Server health"),
 ]
+
+# How often the LangGraph router cycle runs (LLM decides what to check)
+GRAPH_INTERVAL = 60
 
 
 async def run_polling():
     state: NeuralOpsState = default_state()
     last_run = {agent.__name__: datetime.min for agent, _, _ in SCHEDULE}
+    last_graph_run = datetime.min
 
-    await telegram_bot.send_alert("🟢 <b>NeuralOps arrancado</b> — polling continuo activo\n7 agentes listos")
-    logger.info("NeuralOps polling iniciado")
+    await telegram_bot.send_alert(
+        "🟢 <b>NeuralOps arrancado</b> — LangGraph routing activo\n"
+        "Router LLM decidirá qué verificar en cada ciclo"
+    )
+    logger.info("NeuralOps polling iniciado con LangGraph routing")
 
     while True:
         now = datetime.now()
 
-        # Pause non-critical agents if RAM < 500MB free
         server = check_server_health()
         low_memory = server["ram_free_mb"] < 500
         if low_memory:
@@ -64,11 +63,22 @@ async def run_polling():
             await asyncio.sleep(60)
             continue
 
+        # LangGraph cycle — router LLM decides: demo_check, service_check, health_check, response_check
+        elapsed_graph = (now - last_graph_run).total_seconds()
+        if elapsed_graph >= GRAPH_INTERVAL:
+            try:
+                logger.info(f"[Graph] ciclo #{state.get('cycle_count', 0) + 1} — LLM routing")
+                state = await run_graph_cycle(state, max_steps=6)
+                last_graph_run = now
+            except Exception as e:
+                logger.error(f"[Graph] error en ciclo: {e}", exc_info=True)
+                state.setdefault("last_errors", {})["graph"] = str(e)
+
+        # Fixed-interval agents
         for agent_fn, interval_sec, desc in SCHEDULE:
             elapsed = (now - last_run[agent_fn.__name__]).total_seconds()
             if elapsed < interval_sec:
                 continue
-
             try:
                 logger.info(f"[{agent_fn.__name__}] ejecutando — {desc}")
                 state = await agent_fn(state)
