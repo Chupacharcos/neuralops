@@ -109,5 +109,73 @@ async def meta_agent():
     logger.info(f"[MetaAgent] informe semanal {week} generado y guardado en system_context")
 
 
+async def daily_reporter():
+    """Resumen diario a las 22:00 — lee agent_status.json y eventos del día."""
+    import json as _json
+    from pathlib import Path as _Path
+    from core.agent_status import STATUS_FILE
+
+    today = datetime.now().strftime("%d %b %Y")
+    weekday = datetime.now().strftime("%A")
+    weekday_es = {"Monday":"Lunes","Tuesday":"Martes","Wednesday":"Miércoles",
+                  "Thursday":"Jueves","Friday":"Viernes","Saturday":"Sábado","Sunday":"Domingo"}.get(weekday, weekday)
+
+    # Read live status
+    status_data = {}
+    if _Path(STATUS_FILE).exists():
+        try:
+            status_data = _json.loads(_Path(STATUS_FILE).read_text())
+        except Exception:
+            pass
+
+    now_epoch = int(datetime.now().timestamp())
+    active, alertas, stale = [], [], []
+    for name, entry in status_data.items():
+        age = now_epoch - entry.get("epoch", 0)
+        level = entry.get("level", "info")
+        if age > 3600:
+            stale.append(name)
+        elif level in ("warning", "error"):
+            alertas.append(f"{name}: {entry.get('msg','')[:60]}")
+        else:
+            active.append(name)
+
+    # Count today's events from ChromaDB
+    today_prefix = datetime.now().strftime("%Y-%m-%d")
+    all_events = memory.query("events", n_results=500)
+    today_events = [e for e in all_events if e.get("metadata", {}).get("timestamp", "").startswith(today_prefix)]
+    events_by_agent: dict[str, int] = {}
+    for ev in today_events:
+        ag = ev.get("metadata", {}).get("agent", "unknown")
+        events_by_agent[ag] = events_by_agent.get(ag, 0) + 1
+
+    # Build message
+    lines = [f"📊 <b>Resumen NeuralOps — {weekday_es} {today}</b>\n"]
+
+    if active:
+        lines.append(f"✅ <b>Activos ({len(active)}):</b> {', '.join(active[:10])}")
+    if alertas:
+        lines.append(f"⚠️ <b>Con alertas:</b>")
+        for a in alertas[:5]:
+            lines.append(f"  · {a}")
+    if stale:
+        lines.append(f"😴 <b>Sin actividad reciente:</b> {', '.join(stale[:8])}")
+
+    if events_by_agent:
+        top = sorted(events_by_agent.items(), key=lambda x: x[1], reverse=True)[:5]
+        lines.append(f"\n🔄 <b>Eventos hoy:</b> " + " · ".join(f"{ag}({n})" for ag, n in top))
+
+    # Leads and emails from events
+    leads_new = sum(e.get("metadata", {}).get("new_leads", 0) for e in today_events
+                    if e.get("metadata", {}).get("agent") == "lead_scraper")
+    emails_sent = len([e for e in today_events if e.get("metadata", {}).get("agent") == "email_sender"])
+    if leads_new or emails_sent:
+        lines.append(f"📬 Leads nuevos: {leads_new} · Emails enviados: {emails_sent}")
+
+    await telegram_bot.send_alert("\n".join(lines))
+    memory.log_event("meta_agent", "daily_report", {"date": today, "active": len(active), "alerts": len(alertas)})
+    logger.info(f"[MetaAgent] Resumen diario enviado — {len(active)} activos, {len(alertas)} alertas")
+
+
 if __name__ == "__main__":
     asyncio.run(meta_agent())

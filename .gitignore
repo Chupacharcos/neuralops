@@ -5,10 +5,12 @@ leads.db
 state.db
 *.db
 *.sqlite
-memory/
-chroma/
-logs/
-*.log
+# ChromaDB data (but track __init__.py)
+memory/chroma/
+memory/*.bin
+memory/*.parquet
+# Logs (but track .gitkeep)
+logs/*.log
 __pycache__/
 *.pyc
 *.pyo
@@ -19,3 +21,4 @@ cache/
 scrapers/cache/
 .gsc_token.json
 credentials.json
+agent_status.json

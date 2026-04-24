@@ -63,8 +63,14 @@ def queue_action(
     )
 
     if action_type in CONFIRM_TYPES:
+        # Use asyncio.run() only if no loop is running (sync context)
         import asyncio
-        asyncio.get_event_loop().run_until_complete(_send_confirmation(action_id, action_type, project, message))
+        try:
+            loop = asyncio.get_running_loop()
+            # We're in an async context — caller should use async_queue_action instead
+            loop.create_task(_send_confirmation(action_id, action_type, project, message))
+        except RuntimeError:
+            asyncio.run(_send_confirmation(action_id, action_type, project, message))
         logger.info(f"[ConfirmQueue] acción CONFIRM enviada a Telegram: {action_id} ({action_type}/{project})")
     else:
         logger.info(f"[ConfirmQueue] acción AUTO encolada: {action_id} ({action_type}/{project})")

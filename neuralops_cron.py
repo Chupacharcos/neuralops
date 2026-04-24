@@ -17,6 +17,8 @@ logging.basicConfig(
     ],
 )
 logger = logging.getLogger("neuralops_cron")
+# Prevent child loggers from duplicating to root handler
+logging.getLogger().handlers = []  # root has no handlers; basicConfig already set ours
 from core.agent_status import report
 
 AGENTS = {
@@ -42,6 +44,7 @@ AGENTS = {
     "project_onboarding":    "agents.intelligence.project_auto_onboarding:project_auto_onboarding",
     "project_evaluator":       "agents.intelligence.project_evaluator:evaluate_all_projects",
     "meta_agent":              "agents.intelligence.meta_agent:meta_agent",
+    "daily_reporter":          "agents.intelligence.meta_agent:daily_reporter",
     "portfolio_reorder":       "agents.intelligence.portfolio_reorder:portfolio_reorder",
     "recommendation_router":   "agents.intelligence.recommendation_router:recommendation_router",
 }

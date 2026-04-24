@@ -161,6 +161,12 @@ async def _execute_actions():
             result = await _dispatch(action_type, slug, payload)
             mark_executed(action_id, result)
             executed += 1
+            await telegram_bot.send_alert(
+                f"⚡ <b>Acción automática ejecutada</b>\n"
+                f"Tipo: <code>{action_type}</code>\n"
+                f"Proyecto: <code>{slug}</code>\n"
+                f"Resultado: {result}"
+            )
             logger.info(f"[RecRouter] AUTO ejecutada: {action_id} ({action_type}/{slug}) → {result}")
         except Exception as e:
             logger.error(f"[RecRouter] Error ejecutando {action_id}: {e}")
@@ -313,8 +319,44 @@ async def _exec_infra_guide(slug: str, payload: dict) -> str:
 
 
 async def _exec_code_task(action_type: str, slug: str, payload: dict) -> str:
-    """Para refactors y upgrades: crea GitHub issue detallado."""
+    """Para dependency_upgrade aprobado: ejecuta pip install. Para major_refactor: crea issue."""
+    if action_type == "dependency_upgrade":
+        return await _exec_dependency_upgrade(slug, payload)
     return await _exec_github_issue(slug, payload)
+
+
+async def _exec_dependency_upgrade(slug: str, payload: dict) -> str:
+    """Ejecuta pip install de las dependencias aprobadas en el venv del proyecto."""
+    import subprocess
+    packages = payload.get("packages", [])
+    if not packages:
+        packages = [payload.get("detail", "").split()[0]] if payload.get("detail") else []
+    if not packages:
+        return "Sin paquetes especificados para actualizar"
+
+    # Determinar venv del proyecto
+    project_dir = f"/var/www/{slug.replace('-ai','').replace('-engine','')}"
+    venv_python = f"{project_dir}/venv/bin/pip"
+    if not __import__('pathlib').Path(venv_python).exists():
+        venv_python = "/var/www/chatbot/venv/bin/pip"
+
+    results = []
+    for pkg in packages[:5]:
+        try:
+            r = subprocess.run(
+                [venv_python, "install", "--upgrade", pkg],
+                capture_output=True, text=True, timeout=120
+            )
+            if r.returncode == 0:
+                results.append(f"✓ {pkg}")
+            else:
+                results.append(f"✗ {pkg}: {r.stderr[:80]}")
+        except Exception as e:
+            results.append(f"✗ {pkg}: {e}")
+
+    result_str = " | ".join(results)
+    memory.log_event("recommendation_router", "deps_upgraded", {"slug": slug, "results": result_str})
+    return f"Dependencias actualizadas en {slug}: {result_str}"
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
