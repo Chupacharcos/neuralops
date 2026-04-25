@@ -23,6 +23,37 @@ load_dotenv("/var/www/neuralops/.env")
 logger = logging.getLogger(__name__)
 
 CRON_LOG = Path("/var/www/neuralops/logs/cron.log")
+AGENT_STATUS = Path("/var/www/neuralops/agent_status.json")
+
+# Periodicidad esperada de cada agente (minutos). Si lleva > 2× sin reportar → alerta.
+EXPECTED_PERIOD_MIN = {
+    "response_handler":   2,    "demo_watcher":      5,
+    "performance_watch":  5,    "service_monitor":  15,
+    "analytics_parser":  15,    "email_tracker":    15,
+    "health_agent":      15,    "social_listener":  60,
+    "competitor_watcher": 60,   "demo_ci":          60,
+    "control_agent":     30,    "recommendation_router": 120,
+    "project_builder":  360,    "error_repair":    360,
+    # Agentes diarios — umbral 26h
+    "test_runner":     1500,    "code_review":    1500,
+    "github_sync":     1500,    "backup_verifier":1500,
+    "dependency_watch":1500,
+    # Semanales — umbral 8 días
+    "lead_scraper":    11520,   "lead_scorer":    11520,
+    "email_drafter":   11520,   "email_sender":   11520,
+    "twitter_publisher":11520,  "content_creator":11520,
+    "seo_monitor":     11520,   "model_drift":    11520,
+    "project_evaluator":11520,  "meta_agent":     11520,
+    "portfolio_reorder":11520,
+}
+
+# Errores LLM críticos que requieren intervención humana inmediata
+LLM_CRITICAL_PATTERNS = [
+    (r"model_decommissioned", "Modelo LLM descatalogado — actualizar agente"),
+    (r"invalid_api_key|Invalid API Key", "API key LLM inválida o caducada"),
+    (r"401.*authentication|invalid authentication credentials", "Token OAuth caducado (ej: GSC, Gmail, Twitter)"),
+    (r"insufficient_quota", "Cuota LLM agotada (mensual)"),
+]
 
 # Todos los servicios ML del portfolio
 ML_SERVICES = [
@@ -204,6 +235,50 @@ async def _check_patch_updates() -> list[str]:
     return applied
 
 
+def _detect_silent_agents() -> list[tuple[str, int]]:
+    """Devuelve [(agent, minutos_silencio)] para agentes que sobrepasan 2× su periodo esperado."""
+    import json, time
+    from core.agent_status import AGENT_DISPLAY
+    out = []
+    if not AGENT_STATUS.exists():
+        return out
+    try:
+        data = json.loads(AGENT_STATUS.read_text())
+    except Exception:
+        return out
+
+    now = time.time()
+    for ag_key, max_min in EXPECTED_PERIOD_MIN.items():
+        threshold = max_min * 2 * 60  # segundos (2× periodo)
+        # El JSON usa display name ("HealthAgent") no cron key ("health_agent")
+        display = AGENT_DISPLAY.get(ag_key, ag_key)
+        entry = data.get(display) or data.get(ag_key)
+        if not entry or "epoch" not in entry:
+            if max_min <= 60:
+                out.append((ag_key, -1))
+            continue
+        elapsed = now - entry["epoch"]
+        if elapsed > threshold:
+            out.append((ag_key, int(elapsed / 60)))
+    return sorted(out, key=lambda x: x[1] if x[1] > 0 else 9_999_999, reverse=True)[:8]
+
+
+def _detect_critical_llm_errors(minutes: int = 120) -> list[tuple[str, str]]:
+    """Escanea cron.log buscando errores LLM/auth críticos en la última ventana."""
+    if not CRON_LOG.exists():
+        return []
+    cutoff = datetime.now() - timedelta(minutes=minutes)
+    out = []
+    try:
+        recent = CRON_LOG.read_text(errors="ignore")[-200_000:]
+    except Exception:
+        return []
+    for pattern, desc in LLM_CRITICAL_PATTERNS:
+        if re.search(pattern, recent, re.IGNORECASE):
+            out.append((desc, ""))
+    return out
+
+
 async def control_agent():
     now_str = datetime.now().strftime("%H:%M")
     issues = []
@@ -234,6 +309,20 @@ async def control_agent():
     if error_summary:
         unique_errors = list(dict.fromkeys(error_summary))  # dedup preservando orden
         issues.extend(unique_errors[:5])
+
+    # ── 2b. Agentes en silencio (no reportan en su periodo esperado × 2) ─────
+    silent_agents = _detect_silent_agents()
+    if silent_agents:
+        for ag, mins in silent_agents:
+            issues.append(f"🔇 {ag}: sin reportar hace {mins} min")
+        memory.log_event("control_agent", "silent_agents", {
+            "agents": [a for a, _ in silent_agents],
+        })
+
+    # ── 2c. Errores LLM/auth críticos (modelo retirado, token expirado, quota) ─
+    critical_llm = _detect_critical_llm_errors(minutes=120)
+    for desc, sample in critical_llm:
+        issues.append(f"🚨 LLM crítico: {desc}")
 
     # ── 3. Auto-patch de dependencias (solo PATCH) ───────────────────────────
     patch_updates = []

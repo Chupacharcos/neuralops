@@ -20,6 +20,8 @@ AGENT_DISPLAY = {
     "competitor_watcher":  "CompetitorWatcher",
     "health_agent":        "HealthAgent",
     "control_agent":       "ControlAgent",
+    "service_monitor":     "ServiceMonitor",
+    "demo_ci":             "DemoCI",
     "code_review":         "CodeReview",
     "test_runner":         "TestRunner",
     "dependency_watch":    "DependencyWatch",

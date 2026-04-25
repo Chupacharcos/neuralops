@@ -11,7 +11,7 @@ from dotenv import load_dotenv
 load_dotenv("/var/www/neuralops/.env")
 logger = logging.getLogger(__name__)
 
-llm = ChatGroq(model="gemma2-9b-it", api_key=os.getenv("GROQ_API_KEY"), temperature=0.7)
+llm = ChatGroq(model="meta-llama/llama-4-scout-17b-16e-instruct", api_key=os.getenv("GROQ_API_KEY"), temperature=0.7)
 
 PROJECTS_PATH = "/var/www/neuralops/projects.json"
 
