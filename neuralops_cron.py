@@ -33,6 +33,7 @@ AGENTS = {
     "competitor_watcher":"_graph:agents.polling.competitor_watcher:competitor_watcher",
     "health_agent":      "agents.polling.health_agent:health_agent",
     "service_monitor":   "agents.polling.service_monitor:service_monitor",
+    "demo_ci":           "agents.polling.demo_ci:demo_ci",
     # Mantenimiento
     "control_agent":         "agents.maintenance.control_agent:control_agent",
     "code_review":           "agents.maintenance.code_review:code_review",
