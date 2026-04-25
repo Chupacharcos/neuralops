@@ -1,12 +1,12 @@
 """Escribe el estado real de cada agente en un JSON compartido para la house view."""
 import json
 import time
+import fcntl
 import logging
 from pathlib import Path
-from threading import Lock
 
 STATUS_FILE = Path("/var/www/neuralops/agent_status.json")
-_lock = Lock()
+LOCK_FILE = Path("/var/www/neuralops/agent_status.lock")
 logger = logging.getLogger(__name__)
 
 # Mapeo clave_cron → nombre display
@@ -60,15 +60,20 @@ def report(agent_key: str, message: str, level: str = "info"):
         "level": level,
         "epoch": int(time.time()),
     }
-    with _lock:
-        data: dict = {}
-        if STATUS_FILE.exists():
+    # File lock cross-process: lee + modifica + escribe atómicamente
+    try:
+        with open(LOCK_FILE, "w") as lock_f:
+            fcntl.flock(lock_f.fileno(), fcntl.LOCK_EX)
             try:
-                data = json.loads(STATUS_FILE.read_text())
-            except Exception:
-                pass
-        data[display] = entry
-        try:
-            STATUS_FILE.write_text(json.dumps(data, ensure_ascii=False))
-        except Exception as e:
-            logger.warning(f"[AgentStatus] no se pudo escribir: {e}")
+                data: dict = {}
+                if STATUS_FILE.exists():
+                    try:
+                        data = json.loads(STATUS_FILE.read_text())
+                    except Exception:
+                        pass
+                data[display] = entry
+                STATUS_FILE.write_text(json.dumps(data, ensure_ascii=False))
+            finally:
+                fcntl.flock(lock_f.fileno(), fcntl.LOCK_UN)
+    except Exception as e:
+        logger.warning(f"[AgentStatus] no se pudo escribir: {e}")
