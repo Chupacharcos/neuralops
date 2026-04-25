@@ -20,8 +20,18 @@ logger = logging.getLogger("neuralops_cron")
 # Prevent child loggers from duplicating to root handler
 logging.getLogger().handlers = []  # root has no handlers; basicConfig already set ours
 from core.agent_status import report
+from graph.state import default_state
 
 AGENTS = {
+    # Polling (graph-based — wrapped via _run_graph_agent below)
+    "response_handler":  "agents.polling.response_handler:run_standalone",
+    "demo_watcher":      "_graph:agents.polling.demo_watcher:demo_watcher",
+    "performance_watch": "_graph:agents.polling.performance_watch:performance_watch",
+    "analytics_parser":  "_graph:agents.polling.analytics_parser:analytics_parser",
+    "social_listener":   "_graph:agents.polling.social_listener:social_listener",
+    "email_tracker":     "_graph:agents.polling.email_tracker:email_tracker",
+    "competitor_watcher":"_graph:agents.polling.competitor_watcher:competitor_watcher",
+    "health_agent":      "agents.polling.health_agent:health_agent",
     # Mantenimiento
     "control_agent":         "agents.maintenance.control_agent:control_agent",
     "code_review":           "agents.maintenance.code_review:code_review",
@@ -49,6 +59,33 @@ AGENTS = {
     "recommendation_router":   "agents.intelligence.recommendation_router:recommendation_router",
 }
 
+# Persistent state file for graph-based agents run via cron
+_STATE_FILE = "/var/www/neuralops/logs/cron_graph_state.json"
+
+def _load_graph_state() -> dict:
+    import json
+    try:
+        with open(_STATE_FILE) as f:
+            return json.load(f)
+    except Exception:
+        return default_state()
+
+def _save_graph_state(state: dict):
+    import json
+    with open(_STATE_FILE, "w") as f:
+        json.dump(state, f, default=str)
+
+async def _run_graph_agent(module_path: str, func_name: str):
+    """Wraps a LangGraph node so it can run standalone from cron."""
+    module = __import__(module_path, fromlist=[func_name])
+    func = getattr(module, func_name)
+    state = _load_graph_state()
+    new_state = await func(state)
+    if isinstance(new_state, dict):
+        # Merge returned state keys back (keep offset, metrics, etc.)
+        merged = {**state, **new_state}
+        _save_graph_state(merged)
+
 
 async def run_agent(agent_name: str):
     if agent_name not in AGENTS:
@@ -56,13 +93,20 @@ async def run_agent(agent_name: str):
         print(f"Disponibles: {', '.join(AGENTS.keys())}")
         sys.exit(1)
 
-    module_path, func_name = AGENTS[agent_name].rsplit(":", 1)
-    module = __import__(module_path, fromlist=[func_name])
-    func = getattr(module, func_name)
-
+    spec = AGENTS[agent_name]
     logger.info(f"Iniciando agente: {agent_name}")
     report(agent_name, "Ejecutando ciclo...", "info")
-    await func()
+
+    if spec.startswith("_graph:"):
+        # Graph-based agent: wrap with persistent state
+        _, module_path, func_name = spec.split(":", 2)
+        await _run_graph_agent(module_path, func_name)
+    else:
+        module_path, func_name = spec.rsplit(":", 1)
+        module = __import__(module_path, fromlist=[func_name])
+        func = getattr(module, func_name)
+        await func()
+
     logger.info(f"Agente completado: {agent_name}")
     # Si el agente no sobreescribió su status, marcar como completado
     import time as _time

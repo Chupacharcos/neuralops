@@ -56,6 +56,11 @@ async def test_runner():
         if not os.path.exists(venv_python):
             venv_python = "/var/www/chatbot/venv/bin/python"
 
+        # Ensure pytest-timeout is installed so --timeout=60 works
+        venv_pip = venv_python.replace("/bin/python", "/bin/pip")
+        subprocess.run([venv_pip, "install", "pytest-timeout", "-q"],
+                       capture_output=True, timeout=60)
+
         try:
             result = subprocess.run(
                 [venv_python, "-m", "pytest", tests_dir, "-v", "--tb=short", "--timeout=60"],

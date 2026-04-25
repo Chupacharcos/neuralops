@@ -1,6 +1,8 @@
 """Gestiona callbacks de Telegram (botones inline) y aprobaciones pendientes."""
+import asyncio
 import logging
 import json
+from pathlib import Path
 from graph.state import NeuralOpsState
 from core import telegram_bot, memory
 from core.confirmation_queue import approve_action, reject_action
@@ -8,13 +10,28 @@ from core.agent_status import report
 
 logger = logging.getLogger(__name__)
 
+# Persiste el offset de Telegram entre ejecuciones cron
+_OFFSET_FILE = Path("/var/www/neuralops/logs/telegram_offset.json")
+
+
+def _load_offset() -> int:
+    try:
+        return json.loads(_OFFSET_FILE.read_text()).get("offset", 0)
+    except Exception:
+        return 0
+
+
+def _save_offset(offset: int):
+    _OFFSET_FILE.parent.mkdir(parents=True, exist_ok=True)
+    _OFFSET_FILE.write_text(json.dumps({"offset": offset}))
+
 
 async def response_handler(state: NeuralOpsState) -> NeuralOpsState:
     bot = telegram_bot.get_bot()
 
     # ── Leer updates de Telegram (callback_query = botones inline) ──────────
     try:
-        offset = state.get("telegram_offset", 0)
+        offset = state.get("telegram_offset") or _load_offset()
         updates = await bot.get_updates(offset=offset, timeout=5, allowed_updates=["callback_query"])
 
         for update in updates:
@@ -71,8 +88,10 @@ async def response_handler(state: NeuralOpsState) -> NeuralOpsState:
                 await telegram_bot.send_alert(f"❌ Rechazado: <code>{conf_id}</code>")
                 logger.info(f"[ResponseHandler] Rechazado: {conf_id}")
 
+        prev = state.get("telegram_offset") or _load_offset()
         state["telegram_offset"] = offset
-        processed = offset - state.get("telegram_offset", offset)
+        _save_offset(offset)
+        processed = offset - prev
         if processed > 0:
             report("response_handler", f"{processed} callbacks Telegram procesados", "ok")
         else:
@@ -122,3 +141,15 @@ def _handle_draft_approval(draft_id: str, approved: bool):
             logger.info(f"[ResponseHandler] borrador {draft_id} → {new_status}")
             return
     logger.warning(f"[ResponseHandler] draft_id no encontrado: {draft_id}")
+
+
+async def run_standalone():
+    """Punto de entrada para cron — no necesita estado LangGraph."""
+    from graph.state import default_state
+    state = default_state()
+    state["telegram_offset"] = _load_offset()
+    await response_handler(state)
+
+
+if __name__ == "__main__":
+    asyncio.run(run_standalone())

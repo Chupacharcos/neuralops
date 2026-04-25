@@ -539,12 +539,19 @@ async def project_builder():
             report("project_builder", f"Implementado: {spec['nombre']} → puerto {port}", "ok")
 
         except Exception as e:
+            err_str = str(e)
             logger.error(f"[ProjectBuilder] Error con {pdf_path.name}: {e}", exc_info=True)
-            await telegram_bot.send_alert(
-                f"❌ <b>ProjectBuilder error</b> — {pdf_path.name}\n<code>{str(e)[:200]}</code>"
-            )
-            from core.agent_status import report
-            report("project_builder", f"⚠ Error procesando {pdf_path.name}: {str(e)[:60]}", "error")
+            # Rate limit (429) — leave PDF in inbox for retry next cycle, no Telegram spam
+            if "429" in err_str or "rate_limit" in err_str.lower() or "tokens per day" in err_str.lower():
+                logger.warning(f"[ProjectBuilder] Rate limit hit — {pdf_path.name} quedará en inbox para reintento")
+                from core.agent_status import report
+                report("project_builder", f"Rate limit — reintentará {pdf_path.name} en próximo ciclo", "info")
+            else:
+                await telegram_bot.send_alert(
+                    f"❌ <b>ProjectBuilder error</b> — {pdf_path.name}\n<code>{err_str[:200]}</code>"
+                )
+                from core.agent_status import report
+                report("project_builder", f"⚠ Error procesando {pdf_path.name}: {err_str[:60]}", "error")
 
 
 if __name__ == "__main__":
